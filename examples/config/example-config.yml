@@ -1,0 +1,133 @@
+# Example Nodi Configuration
+# Copy this to ~/.nodi/config.yml and customize
+
+services:
+  # User service configuration
+  user-service:
+    dev:
+      base_url: https://user-service.dev.company.com
+      timeout: 30
+      verify_ssl: true
+    qa:
+      base_url: https://user-service.qa.company.com
+      timeout: 30
+      verify_ssl: true
+    prod:
+      base_url: https://user-service.prod.company.com
+      timeout: 30
+      verify_ssl: true
+
+    # Endpoint aliases (shared across all environments)
+    aliases:
+      users: /api/v1/users
+      user: /api/v1/users/{id}
+      profile: /api/v1/users/{id}/profile
+      search: /api/v1/users/search
+      health: /health
+
+    description: User management service
+
+  # Order service configuration
+  order-service:
+    dev:
+      base_url: https://order-service.dev.company.com
+    qa:
+      base_url: https://order-service.qa.company.com
+    prod:
+      base_url: https://order-service.prod.company.com
+
+    aliases:
+      orders: /api/v1/orders
+      order: /api/v1/orders/{id}
+      status: /api/v1/orders/{id}/status
+      recent: /api/v1/orders/recent
+      health: /health
+
+    description: Order management service
+
+  # Payment service configuration
+  payment-service:
+    dev:
+      base_url: https://payment-service.dev.company.com
+    qa:
+      base_url: https://payment-service.qa.company.com
+    prod:
+      base_url: https://payment-service.prod.company.com
+
+    aliases:
+      payments: /api/v1/payments
+      payment: /api/v1/payments/{id}
+      process: /api/v1/payments/process
+      health: /health
+
+    description: Payment processing service
+
+# Headers per environment (applied to all services)
+headers:
+  dev:
+    X-API-Key: ${DEV_API_KEY}
+    X-Environment: development
+    X-Request-ID: dev-request
+    # Use variable substitution for dynamic values like auth cookies
+    Cookie: ${var:auth_cookie}
+    Authorization: Bearer ${var:dev_token}
+
+  qa:
+    X-API-Key: ${QA_API_KEY}
+    X-Environment: qa
+    X-Request-ID: qa-request
+    Cookie: ${var:auth_cookie}
+    Authorization: Bearer ${var:qa_token}
+
+  prod:
+    X-API-Key: ${PROD_API_KEY}
+    X-Environment: production
+    X-Request-ID: prod-request
+    Cookie: ${var:auth_cookie}
+    Authorization: Bearer ${var:prod_token}
+
+# SSL certificates per environment
+certificates:
+  dev:
+    cert: ~/.certs/dev-qa.crt
+    key: ~/.certs/dev-qa.key
+    ca: ~/.certs/dev-qa-ca.crt
+    verify: true
+
+  qa:
+    cert: ~/.certs/dev-qa.crt
+    key: ~/.certs/dev-qa.key
+    ca: ~/.certs/dev-qa-ca.crt
+    verify: true
+
+  prod:
+    cert: ~/.certs/prod.crt
+    key: ~/.certs/prod.key
+    ca: ~/.certs/prod-ca.crt
+    verify: true
+
+# Default settings
+default_environment: dev
+default_service: user-service
+
+# Service aliases (shortcuts)
+service_aliases:
+  us: user-service
+  os: order-service
+  ps: payment-service
+
+# Variables for dynamic header values
+# Use ${var:variable_name} syntax in headers to reference these
+# Variables can be updated at runtime to inject different auth cookies or tokens
+variables:
+  # Auth cookies that can be different for different users
+  auth_cookie: "session_id=abc123; user_id=user1"
+
+  # Per-environment tokens
+  dev_token: "dev_jwt_token_here"
+  qa_token: "qa_jwt_token_here"
+  prod_token: "prod_jwt_token_here"
+
+  # Other dynamic values
+  correlation_id: "correlation-123"
+  tenant_id: "tenant-456"

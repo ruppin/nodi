@@ -1,0 +1,10 @@
+###
+GET https://jsonplaceholder.typicode.com/posts/1
+Content-Type: application/json
+###
+GET https://swapi.dev/api/people/1/
+Content-Type: application/json
+###
+GET https://api.github.com/repos/octocat/Hello-World
+Content-Type: application/json
+###

@@ -1,0 +1,6 @@
+# Optional jq support
+# Note: pyjq has complex dependencies and may fail on Windows
+# It requires a C compiler and may need additional build tools
+# If installation fails, Nodi will use simple built-in filtering instead
+
+pyjq>=2.6.0

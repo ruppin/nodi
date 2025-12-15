@@ -1,0 +1,6 @@
+include README.md
+include LICENSE
+include requirements.txt
+include requirements-providers.txt
+recursive-include examples *.yml *.yaml
+recursive-include nodi *.py
