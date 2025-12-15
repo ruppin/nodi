@@ -507,6 +507,9 @@ Other:
             headers = self.env_manager.get_headers()
             headers.update(additional_headers)
 
+            # Get certificates for the current environment
+            certificates = self.env_manager.get_certificates()
+
             # Create request
             request = ProviderRequest(
                 method=method,
@@ -514,8 +517,8 @@ Other:
                 headers=headers,
             )
 
-            # Execute request
-            response = self.rest_provider.request(request)
+            # Execute request with certificates
+            response = self.rest_provider.request(request, certificates=certificates)
 
             # Add to history
             self.history.add(

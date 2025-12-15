@@ -121,15 +121,20 @@ def request(ctx, request_spec, method, data, header, format, filter, verbose):
                 name, value = h.split(":", 1)
                 headers[name.strip()] = value.strip()
 
+        # Get certificates for the environment
+        certificates = env_manager.get_certificates(spec.environment)
+
         if verbose:
             click.echo(f"{method} {url}")
             click.echo(f"Headers: {headers}")
+            if certificates:
+                click.echo(f"Certificates configured: cert={certificates.cert}, key={certificates.key}, ca={certificates.ca}")
             click.echo()
 
         # Create and execute request
         request_obj = ProviderRequest(method=method, resource=url, headers=headers, data=data)
 
-        response = rest_provider.request(request_obj)
+        response = rest_provider.request(request_obj, certificates=certificates)
 
         # Add to history
         history.add(

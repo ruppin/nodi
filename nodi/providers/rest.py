@@ -44,17 +44,21 @@ class RestProvider(DataProvider):
 
         self.client = httpx.Client(**client_config)
 
-    def request(self, request: ProviderRequest) -> ProviderResponse:
+    def request(self, request: ProviderRequest, certificates: Optional[Certificates] = None) -> ProviderResponse:
         """
         Execute HTTP request.
 
         Args:
             request: ProviderRequest with HTTP details
+            certificates: Optional SSL certificates for this request
 
         Returns:
             ProviderResponse with HTTP result
         """
-        if not self.client:
+        # Update certificates if provided for this request
+        if certificates:
+            self.update_certificates(certificates)
+        elif not self.client:
             self._setup_client()
 
         start_time = time.time()
@@ -162,11 +166,43 @@ class RestProvider(DataProvider):
     def update_certificates(self, certificates: Optional[Certificates]):
         """Update SSL certificates and recreate client."""
         if certificates:
-            self.config["verify_ssl"] = certificates.verify
+            from pathlib import Path
 
-            if certificates.cert and certificates.key:
-                self.config["cert"] = certificates.cert
-                self.config["key"] = certificates.key
+            # Expand paths for tilde and relative paths
+            expanded_certs = certificates.expand_paths()
+
+            # Set client certificate and key
+            if expanded_certs.cert and expanded_certs.key:
+                # Only set if files exist
+                cert_path = Path(expanded_certs.cert)
+                key_path = Path(expanded_certs.key)
+                if cert_path.exists() and key_path.exists():
+                    self.config["cert"] = expanded_certs.cert
+                    self.config["key"] = expanded_certs.key
+                else:
+                    # Files don't exist, skip cert config
+                    self.config.pop("cert", None)
+                    self.config.pop("key", None)
+            elif expanded_certs.cert:
+                # Just cert file (for some cases)
+                cert_path = Path(expanded_certs.cert)
+                if cert_path.exists():
+                    self.config["cert"] = expanded_certs.cert
+                else:
+                    self.config.pop("cert", None)
+
+            # Set CA certificate for verification
+            if expanded_certs.ca:
+                ca_path = Path(expanded_certs.ca)
+                if ca_path.exists():
+                    # httpx uses 'verify' parameter for CA bundle path
+                    self.config["verify_ssl"] = expanded_certs.ca
+                else:
+                    # CA file doesn't exist, use default verification
+                    self.config["verify_ssl"] = expanded_certs.verify
+            else:
+                # No CA specified, use verify flag
+                self.config["verify_ssl"] = expanded_certs.verify
 
         # Recreate client with new config
         self.close()
