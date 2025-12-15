@@ -74,8 +74,17 @@ class URLResolver:
         if query_string:
             query_params = self._parse_query_string(query_string)
 
+        # Get service config to resolve alias path for parameter detection
+        service_obj = self.config.get_service(service)
+        alias_path = None
+        if service_obj:
+            # Try to get the alias path before extracting params
+            endpoint_without_params = endpoint.split(":")[0]
+            if endpoint_without_params in service_obj.aliases:
+                alias_path = service_obj.aliases[endpoint_without_params]
+
         # Parse path parameters from endpoint (e.g., user:123 -> {id: 123})
-        endpoint, path_params = self._extract_path_params(endpoint)
+        endpoint, path_params = self._extract_path_params(endpoint, alias_path)
 
         return RequestSpec(
             service=service,
@@ -137,14 +146,16 @@ class URLResolver:
         # Not an alias, return as-is
         return endpoint
 
-    def _extract_path_params(self, endpoint: str) -> Tuple[str, Optional[Dict[str, str]]]:
+    def _extract_path_params(self, endpoint: str, alias_path: Optional[str] = None) -> Tuple[str, Optional[Dict[str, str]]]:
         """
-        Extract path parameters from endpoint.
+        Extract path parameters from endpoint and auto-detect parameter name from alias.
 
         Examples:
-            user:123 -> (user, {id: 123})
-            users:123:profile -> (users:profile, {id: 123})
-            orders -> (orders, None)
+            endpoint="user:123", alias_path="/users/{id}" -> (user, {id: 123})
+            endpoint="user:123", alias_path="/users/{userId}" -> (user, {userId: 123})
+            endpoint="doc:abc", alias_path="/documents/{documentId}" -> (doc, {documentId: abc})
+            endpoint="users:123:profile" -> (users:profile, {id: 123})
+            endpoint="orders" -> (orders, None)
         """
         # Pattern: alias:value or alias:value:rest
         parts = endpoint.split(":")
@@ -153,7 +164,7 @@ class URLResolver:
             # No path params
             return endpoint, None
 
-        # Extract first parameter as 'id' by default
+        # Extract first parameter value
         alias = parts[0]
         param_value = parts[1]
 
@@ -162,7 +173,16 @@ class URLResolver:
             rest = ":".join(parts[2:])
             alias = f"{alias}:{rest}"
 
-        return alias, {"id": param_value}
+        # Auto-detect parameter name from alias path
+        # Find first {param_name} in the alias path
+        param_name = "id"  # Default to 'id'
+        if alias_path:
+            param_pattern = re.compile(r'\{(\w+)\}')
+            match = param_pattern.search(alias_path)
+            if match:
+                param_name = match.group(1)  # Extract parameter name (e.g., "userId", "documentId")
+
+        return alias, {param_name: param_value}
 
     def _substitute_path_params(self, path: str, params: Dict[str, str]) -> str:
         """Substitute path parameters in URL template."""
