@@ -2,7 +2,7 @@
 
 import re
 import sys
-from typing import Optional
+from typing import Optional, Any
 from prompt_toolkit import PromptSession
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 from prompt_toolkit.completion import WordCompleter
@@ -854,7 +854,8 @@ Other:
                 failed += 1
 
         print("\n" + "=" * 70)
-        print(f"Results: {Color.success(f'{passed} passed')}, {Color.error(f'{failed} failed') if failed > 0 else '0 failed'}")
+        failed_text = Color.error(f'{failed} failed') if failed > 0 else '0 failed'
+        print(f"Results: {Color.success(f'{passed} passed')}, {failed_text}")
 
     def _run_scripts_parallel(self, script_paths):
         """Run multiple scripts in parallel."""
@@ -877,9 +878,11 @@ Other:
                     print(f"    {Color.error(script_result['error'])}")
 
         print("\n" + "=" * 70)
-        print(f"Results: {Color.success(f'{results['passed']} passed')}, "
-              f"{Color.error(f'{results['failed']} failed') if results['failed'] > 0 else '0 failed'} "
-              f"({results['duration']:.2f}s total)")
+        passed = results['passed']
+        failed = results['failed']
+        duration = results['duration']
+        failed_text = Color.error(f'{failed} failed') if failed > 0 else '0 failed'
+        print(f"Results: {Color.success(f'{passed} passed')}, {failed_text} ({duration:.2f}s total)")
 
     def _handle_run_suite(self, parts):
         """Run a test suite."""
@@ -917,9 +920,11 @@ Other:
                         print(f"       {Color.error(step['error'])}")
 
             print("\n" + "=" * 70)
-            print(f"Suite completed: {Color.success(f'{results['passed']} passed')}, "
-                  f"{Color.error(f'{results['failed']} failed') if results['failed'] > 0 else '0 failed'} "
-                  f"({results['duration']:.2f}s total)")
+            passed = results['passed']
+            failed = results['failed']
+            duration = results['duration']
+            failed_text = Color.error(f'{failed} failed') if failed > 0 else '0 failed'
+            print(f"Suite completed: {Color.success(f'{passed} passed')}, {failed_text} ({duration:.2f}s total)")
 
         except Exception as e:
             print(Color.error(f"Suite execution failed: {str(e)}"))

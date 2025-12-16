@@ -16,6 +16,11 @@ class EnvironmentManager:
         self.header_manager = HeaderManager(config)
         self.url_resolver = URLResolver(config)
 
+    @property
+    def resolver(self) -> URLResolver:
+        """Get the URL resolver (alias for url_resolver)."""
+        return self.url_resolver
+
     def switch_service(self, service: str) -> bool:
         """
         Switch to a different service.
