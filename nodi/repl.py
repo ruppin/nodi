@@ -19,7 +19,11 @@ from nodi.formatters.yaml_fmt import YAMLFormatter
 from nodi.formatters.table import TableFormatter
 from nodi.history import HistoryManager
 from nodi.filters import JSONFilter
+from nodi.projections import JSONProjection
+from nodi.scripting import ScriptEngine, SuiteRunner
 from nodi.utils.color import Color
+import glob
+import os
 
 
 class NodiREPL:
@@ -31,6 +35,15 @@ class NodiREPL:
         self.rest_provider = RestProvider()
         self.history = HistoryManager()
         self.json_filter = JSONFilter()
+        self.json_projection = JSONProjection()
+
+        # Scripting
+        self.script_engine = ScriptEngine(
+            config=config,
+            rest_provider=self.rest_provider,
+            resolver=self.env_manager.resolver
+        )
+        self.suite_runner = SuiteRunner(self.script_engine)
 
         # Formatters
         self.json_formatter = JSONFormatter(colored=True)
@@ -113,6 +126,10 @@ class NodiREPL:
             "patch",
             "delete",
             "format",
+            "run",
+            "run-suite",
+            "scripts",
+            "show",
         ]
 
         # Add service names
@@ -127,16 +144,27 @@ class NodiREPL:
 
     def _process_command(self, command: str):
         """Process a REPL command."""
-        # Check for filter first (preserve the full command with |)
+        # Check for filter/projection first (preserve the full command with |)
         filter_expr = None
+        projection_spec = None
+
         if "|" in command:
-            # Split on first | to get command and filter
+            # Split on first | to get command and filter/projection
             cmd_part, filter_part = command.split("|", 1)
             command = cmd_part.strip()
             # Remove 'jq' keyword if present
             filter_expr = filter_part.strip()
             if filter_expr.startswith("jq "):
                 filter_expr = filter_expr[3:].strip()
+
+            # Check if it's a projection (starts with %)
+            if filter_expr.startswith("%"):
+                projection_spec = filter_expr[1:].strip()
+                projection_spec = self._resolve_projection(projection_spec)
+                filter_expr = None  # Clear filter, we're using projection
+            else:
+                # Resolve predefined filter if it starts with @
+                filter_expr = self._resolve_filter(filter_expr)
 
         parts = command.split()
         if not parts:
@@ -185,6 +213,24 @@ class NodiREPL:
         elif cmd == "get-variable":
             self._handle_get_variable(parts)
 
+        elif cmd == "filters":
+            self._show_filters()
+
+        elif cmd == "projections":
+            self._show_projections()
+
+        elif cmd == "run":
+            self._handle_run_script(parts)
+
+        elif cmd == "run-suite":
+            self._handle_run_suite(parts)
+
+        elif cmd == "scripts":
+            self._show_scripts()
+
+        elif cmd == "show":
+            self._handle_show_script(parts)
+
         elif cmd == "history":
             self._show_history(parts)
 
@@ -195,11 +241,11 @@ class NodiREPL:
             self._handle_format(parts)
 
         elif cmd in ("get", "post", "put", "patch", "delete", "head", "options"):
-            self._handle_http_request(cmd.upper(), parts[1:], filter_expr)
+            self._handle_http_request(cmd.upper(), parts[1:], filter_expr, projection_spec)
 
         else:
             # Try as endpoint request (GET by default)
-            self._handle_http_request("GET", parts, filter_expr)
+            self._handle_http_request("GET", parts, filter_expr, projection_spec)
 
     def _show_help(self):
         """Show help message."""
@@ -243,6 +289,31 @@ Variables:
   variables             Show all variables
   set-variable <name> <value>  Set variable value
   get-variable <name>   Get variable value
+
+Filters:
+  filters               Show predefined filters
+  users | @filter_name  Apply predefined filter by name
+  users | @emails       Example: Extract all emails
+  users | .[*].id       Direct filter expression (without @)
+
+Projections:
+  projections           Show predefined projections
+  users | %projection   Apply predefined projection (field selection)
+  users | %user_summary Example: Show only id, name, email
+
+Scripts:
+  scripts               List all .nodi script files
+  show <script>         Show script content
+  run <script> [params] Run a single script with optional named parameters
+  run <script1> <script2> ...  Run multiple scripts sequentially
+  run --parallel <scripts...>  Run multiple scripts in parallel
+  run-suite <suite.yml> Run a test suite
+
+  Examples:
+    run test_login.nodi user_id=123 token=abc
+    run test_*.nodi
+    run --parallel load_test1.nodi load_test2.nodi
+    run-suite integration_tests.yml
 
 Output:
   format <json|yaml|table>    Set output format
@@ -447,6 +518,79 @@ Other:
 
         return pattern.sub(replace, value)
 
+    def _show_filters(self):
+        """Show all predefined filters."""
+        filters = self.env_manager.config.list_filters()
+        if filters:
+            print(f"\n{Color.BOLD}Predefined Filters:{Color.RESET}")
+            for name, expression in filters.items():
+                print(f"  {Color.info(f'@{name}')}: {expression}")
+            print(f"\n{Color.DIM}Use: endpoint | @filter_name{Color.RESET}")
+        else:
+            print("No predefined filters configured")
+
+    def _show_projections(self):
+        """Show all predefined projections."""
+        projections = self.env_manager.config.list_projections()
+        if projections:
+            print(f"\n{Color.BOLD}Predefined Projections:{Color.RESET}")
+            for name, spec in projections.items():
+                import json
+                spec_str = json.dumps(spec) if isinstance(spec, (list, dict)) else str(spec)
+                print(f"  {Color.info(f'%{name}')}: {spec_str}")
+            print(f"\n{Color.DIM}Use: endpoint | %projection_name{Color.RESET}")
+        else:
+            print("No predefined projections configured")
+
+    def _resolve_filter(self, filter_expr: str) -> str:
+        """
+        Resolve predefined filter names to their expressions.
+        Supports both @filter_name and filter_name syntax.
+
+        Args:
+            filter_expr: Filter expression (may be a filter name or actual expression)
+
+        Returns:
+            Resolved filter expression
+        """
+        if not filter_expr:
+            return filter_expr
+
+        # Check if it's a predefined filter reference (@filter_name)
+        if filter_expr.startswith("@"):
+            filter_name = filter_expr[1:].strip()
+            predefined_filter = self.env_manager.config.get_filter(filter_name)
+            if predefined_filter:
+                return predefined_filter
+            else:
+                # Filter name not found, return original (will likely fail, but let user know)
+                print(Color.warning(f"Warning: Predefined filter '@{filter_name}' not found. Using as literal expression."))
+                return filter_expr
+
+        # Not a filter reference, return as-is
+        return filter_expr
+
+    def _resolve_projection(self, projection_name: str) -> Optional[Any]:
+        """
+        Resolve predefined projection name to its specification.
+
+        Args:
+            projection_name: Projection name (without %)
+
+        Returns:
+            Projection specification or None if not found
+        """
+        if not projection_name:
+            return None
+
+        predefined_projection = self.env_manager.config.get_projection(projection_name)
+        if predefined_projection:
+            return predefined_projection
+        else:
+            # Projection name not found
+            print(Color.warning(f"Warning: Predefined projection '%{projection_name}' not found."))
+            return None
+
     def _show_history(self, parts):
         """Show request history."""
         if len(parts) > 1 and parts[1] == "clear":
@@ -471,7 +615,7 @@ Other:
         else:
             print(Color.error(f"Invalid format: {fmt}"))
 
-    def _handle_http_request(self, method: str, args: list, filter_expr: Optional[str] = None):
+    def _handle_http_request(self, method: str, args: list, filter_expr: Optional[str] = None, projection_spec: Optional[Any] = None):
         """Handle HTTP request."""
         if not args:
             print(f"Usage: {method.lower()} <endpoint> [-H <header>] [params...]")
@@ -531,12 +675,12 @@ Other:
             )
 
             # Display response
-            self._display_response(response, filter_expr)
+            self._display_response(response, filter_expr, projection_spec)
 
         except Exception as e:
             print(Color.error(f"Request failed: {str(e)}"))
 
-    def _display_response(self, response, filter_expr: Optional[str] = None):
+    def _display_response(self, response, filter_expr: Optional[str] = None, projection_spec: Optional[Any] = None):
         """Display response."""
         # Show status
         if response.is_success:
@@ -553,9 +697,18 @@ Other:
             )
         )
 
-        # Apply filter if specified
+        # Apply filter or projection if specified
         data = response.data
-        if filter_expr and data:
+
+        # Apply projection first (if specified)
+        if projection_spec and data:
+            try:
+                data = self.json_projection.apply(data, projection_spec)
+            except Exception as e:
+                print(Color.warning(f"Projection error: {str(e)}"))
+
+        # Then apply filter (if specified and no projection)
+        elif filter_expr and data:
             try:
                 data = self.json_filter.apply(data, filter_expr)
             except Exception as e:
@@ -570,3 +723,226 @@ Other:
                 print(self.yaml_formatter.format(data))
             elif self.output_format == "table":
                 print(self.table_formatter.format(data))
+
+    def _show_scripts(self):
+        """List all .nodi script files."""
+        # Look in current directory and .nodi/scripts
+        script_dirs = [
+            Path.cwd(),
+            Path.home() / ".nodi" / "scripts",
+        ]
+
+        scripts_found = []
+        for script_dir in script_dirs:
+            if script_dir.exists():
+                for script_file in script_dir.glob("*.nodi"):
+                    scripts_found.append(str(script_file))
+
+        if not scripts_found:
+            print("No .nodi script files found")
+            print(f"Searched in: {', '.join(str(d) for d in script_dirs)}")
+            return
+
+        print(Color.bold("Available Scripts:"))
+        for script_path in sorted(scripts_found):
+            script_name = Path(script_path).name
+            print(f"  {Color.info(script_name)} - {script_path}")
+
+    def _handle_show_script(self, parts):
+        """Show script content."""
+        if len(parts) < 2:
+            print(Color.error("Usage: show <script.nodi>"))
+            return
+
+        script_name = parts[1]
+        script_path = self._find_script(script_name)
+
+        if not script_path:
+            print(Color.error(f"Script not found: {script_name}"))
+            return
+
+        print(Color.bold(f"Script: {script_name}"))
+        print("-" * 70)
+
+        with open(script_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+            print(content)
+
+    def _handle_run_script(self, parts):
+        """Run one or more scripts."""
+        if len(parts) < 2:
+            print(Color.error("Usage: run <script.nodi> [params] or run --parallel <scripts...>"))
+            return
+
+        # Check for --parallel flag
+        parallel = False
+        if parts[1] == "--parallel":
+            parallel = True
+            parts = parts[1:]  # Remove --parallel from parts
+
+        if len(parts) < 2:
+            print(Color.error("No scripts specified"))
+            return
+
+        # Collect script paths and parameters
+        script_paths = []
+        params = {}
+
+        for arg in parts[1:]:
+            # Check if it's a parameter (key=value)
+            if '=' in arg:
+                key, value = arg.split('=', 1)
+                params[key] = value
+            elif '*' in arg or '?' in arg:
+                # Glob pattern
+                matched = glob.glob(arg)
+                for match in matched:
+                    if match.endswith('.nodi'):
+                        script_paths.append(match)
+            else:
+                # Script name
+                script_path = self._find_script(arg)
+                if script_path:
+                    script_paths.append(script_path)
+                else:
+                    print(Color.error(f"Script not found: {arg}"))
+                    return
+
+        if not script_paths:
+            print(Color.error("No valid scripts found"))
+            return
+
+        # Run scripts
+        if parallel:
+            self._run_scripts_parallel(script_paths)
+        else:
+            self._run_scripts_sequential(script_paths, params)
+
+    def _run_scripts_sequential(self, script_paths, params):
+        """Run multiple scripts sequentially."""
+        total = len(script_paths)
+        print(f"Running {total} script(s) sequentially...")
+        print("=" * 70)
+
+        passed = 0
+        failed = 0
+
+        for i, script_path in enumerate(script_paths):
+            script_name = Path(script_path).name
+            print(f"\n[{i+1}/{total}] Running {Color.info(script_name)}...")
+
+            try:
+                result = self.script_engine.run_script(script_path, params)
+
+                if result['status'] == 'PASS':
+                    print(Color.success(f"PASS ({result['duration']:.2f}s)"))
+                    passed += 1
+
+                    # Show output
+                    for line in result.get('output', []):
+                        print(f"  {line}")
+                else:
+                    print(Color.error(f"FAIL ({result['duration']:.2f}s)"))
+                    failed += 1
+
+                    # Show error
+                    if 'error' in result:
+                        print(Color.error(f"  Error: {result['error']}"))
+
+            except Exception as e:
+                print(Color.error(f"FAIL - {str(e)}"))
+                failed += 1
+
+        print("\n" + "=" * 70)
+        print(f"Results: {Color.success(f'{passed} passed')}, {Color.error(f'{failed} failed') if failed > 0 else '0 failed'}")
+
+    def _run_scripts_parallel(self, script_paths):
+        """Run multiple scripts in parallel."""
+        print(f"Running {len(script_paths)} script(s) in parallel...")
+        print("=" * 70)
+
+        results = self.suite_runner.run_scripts_parallel(script_paths)
+
+        print()
+        for script_result in results['scripts']:
+            script_name = Path(script_result['script']).name
+            status = script_result['status']
+            duration = script_result['duration']
+
+            if status == 'PASS':
+                print(f"[{Color.success('✓')}] {script_name} ({duration:.2f}s)")
+            else:
+                print(f"[{Color.error('✗')}] {script_name}")
+                if 'error' in script_result:
+                    print(f"    {Color.error(script_result['error'])}")
+
+        print("\n" + "=" * 70)
+        print(f"Results: {Color.success(f'{results['passed']} passed')}, "
+              f"{Color.error(f'{results['failed']} failed') if results['failed'] > 0 else '0 failed'} "
+              f"({results['duration']:.2f}s total)")
+
+    def _handle_run_suite(self, parts):
+        """Run a test suite."""
+        if len(parts) < 2:
+            print(Color.error("Usage: run-suite <suite.yml>"))
+            return
+
+        suite_file = parts[1]
+        suite_path = self._find_file(suite_file, ['.yml', '.yaml'])
+
+        if not suite_path:
+            print(Color.error(f"Suite file not found: {suite_file}"))
+            return
+
+        print(f"Running suite: {Color.info(suite_file)}")
+        print("=" * 70)
+
+        try:
+            results = self.suite_runner.run_suite(suite_path)
+
+            print(f"\nSuite: {Color.bold(results['suite'])}")
+            print("-" * 70)
+
+            for step in results['steps']:
+                step_name = step.get('step', step.get('group', 'Unnamed'))
+                script = step['script']
+                status = step['status']
+                duration = step['duration']
+
+                if status == 'PASS':
+                    print(f"[{Color.success('PASS')}] {step_name}: {script} ({duration:.2f}s)")
+                else:
+                    print(f"[{Color.error('FAIL')}] {step_name}: {script}")
+                    if 'error' in step:
+                        print(f"       {Color.error(step['error'])}")
+
+            print("\n" + "=" * 70)
+            print(f"Suite completed: {Color.success(f'{results['passed']} passed')}, "
+                  f"{Color.error(f'{results['failed']} failed') if results['failed'] > 0 else '0 failed'} "
+                  f"({results['duration']:.2f}s total)")
+
+        except Exception as e:
+            print(Color.error(f"Suite execution failed: {str(e)}"))
+
+    def _find_script(self, script_name):
+        """Find a script file by name."""
+        return self._find_file(script_name, ['.nodi'])
+
+    def _find_file(self, filename, extensions):
+        """Find a file in common locations."""
+        # Add extension if not present
+        if not any(filename.endswith(ext) for ext in extensions):
+            filename = filename + extensions[0]
+
+        # Search locations
+        search_paths = [
+            Path(filename),  # Absolute or relative path
+            Path.cwd() / filename,  # Current directory
+            Path.home() / ".nodi" / "scripts" / filename,  # User scripts
+        ]
+
+        for path in search_paths:
+            if path.exists() and path.is_file():
+                return str(path)
+
+        return None

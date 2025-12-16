@@ -1,7 +1,7 @@
 """Configuration data models for Nodi."""
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from pathlib import Path
 
 
@@ -89,6 +89,8 @@ class Config:
     service_aliases: Dict[str, str] = field(default_factory=dict)
     profiles: Dict[str, Dict] = field(default_factory=dict)
     variables: Dict[str, str] = field(default_factory=dict)
+    filters: Dict[str, str] = field(default_factory=dict)
+    projections: Dict[str, Any] = field(default_factory=dict)
 
     def get_service(self, service_name: str) -> Optional[Service]:
         """Get service by name or alias."""
@@ -143,3 +145,19 @@ class Config:
     def list_variables(self) -> Dict[str, str]:
         """Get all variables."""
         return self.variables.copy()
+
+    def get_filter(self, filter_name: str) -> Optional[str]:
+        """Get a filter expression by name."""
+        return self.filters.get(filter_name)
+
+    def list_filters(self) -> Dict[str, str]:
+        """Get all predefined filters."""
+        return self.filters.copy()
+
+    def get_projection(self, projection_name: str) -> Optional[Any]:
+        """Get a projection specification by name."""
+        return self.projections.get(projection_name)
+
+    def list_projections(self) -> Dict[str, Any]:
+        """Get all predefined projections."""
+        return self.projections.copy()

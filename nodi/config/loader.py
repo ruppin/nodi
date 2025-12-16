@@ -194,6 +194,8 @@ class ConfigLoader:
             service_aliases=data.get("service_aliases", {}),
             profiles=data.get("profiles", {}),
             variables=data.get("variables", {}),
+            filters=data.get("filters", {}),
+            projections=data.get("projections", {}),
         )
 
     def create_default_config(self, path: Optional[Path] = None) -> Path:
