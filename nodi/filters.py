@@ -75,12 +75,26 @@ class JSONFilter:
             if isinstance(data, dict):
                 return data.get(field)
 
-        # .[n] -> array index
-        if expr.startswith(".[") and expr.endswith("]"):
+        # .[n] or .[start:end] or .[start:end:step] -> array index or slice
+        if expr.startswith(".[") and expr.endswith("]") and "." not in expr[2:-1]:
             try:
-                index = int(expr[2:-1])
-                if isinstance(data, list):
-                    return data[index]
+                slice_str = expr[2:-1]
+
+                # Check if it's a slice (contains ':')
+                if ':' in slice_str:
+                    # Parse slice notation: [start:end] or [start:end:step]
+                    parts = slice_str.split(':')
+                    start = int(parts[0]) if parts[0] else None
+                    end = int(parts[1]) if len(parts) > 1 and parts[1] else None
+                    step = int(parts[2]) if len(parts) > 2 and parts[2] else None
+
+                    if isinstance(data, list):
+                        return data[start:end:step] if step else data[start:end]
+                else:
+                    # Simple integer index
+                    index = int(slice_str)
+                    if isinstance(data, list):
+                        return data[index]
             except (ValueError, IndexError):
                 pass
 

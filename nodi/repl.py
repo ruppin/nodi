@@ -292,6 +292,9 @@ Filters:
   users | @filter_name  Apply predefined filter by name
   users | @emails       Example: Extract all emails
   users | .[*].id       Direct filter expression (without @)
+  users | .[0:5]        Array slicing - first 5 items
+  users | .[-3:]        Array slicing - last 3 items
+  users | .[::2]        Array slicing - every 2nd item
 
 Projections:
   projections           Show predefined projections
