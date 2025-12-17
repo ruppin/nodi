@@ -68,8 +68,9 @@ class TableFormatter:
             row = [str(item.get(key, "")) for key in keys]
             table.add_row(*row)
 
-        # Render to string
-        console = Console(record=True)
+        # Render to string (use file=None to prevent printing to stdout)
+        from io import StringIO
+        console = Console(file=StringIO(), record=True)
         console.print(table)
         return console.export_text()
 
