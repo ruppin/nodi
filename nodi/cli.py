@@ -27,6 +27,7 @@ from nodi.formatters.csv_fmt import CSVFormatter
 from nodi.utils.color import Color
 from nodi.history import HistoryManager
 from nodi.filters import JSONFilter
+from nodi.projections import JSONProjection
 
 
 @click.group(invoke_without_command=True)
@@ -81,14 +82,29 @@ def repl(ctx):
 @click.option("--data", "-d", help="Request data (JSON)")
 @click.option("--header", "-H", multiple=True, help="Additional headers")
 @click.option("--format", "-f", type=click.Choice(["json", "yaml", "table", "csv"]), default="json")
-@click.option("--filter", help="jq filter expression")
+@click.option("--projection", "-p", help="Predefined projection name")
+@click.option("--filter", help="jq filter expression or @filter_name for predefined filters")
 @click.option("--verbose", is_flag=True, help="Verbose output")
 @click.pass_context
-def request(ctx, request_spec, method, data, header, format, filter, verbose):
-    """Execute a single HTTP request."""
+def request(ctx, request_spec, method, data, header, format, projection, filter, verbose):
+    """Execute a single HTTP request.
+
+    Examples:
+      nodi request user-service.dev@users
+      nodi request user-service.dev@users --projection user_summary
+      nodi request user-service.dev@users --filter '.[0]'
+      nodi request user-service.dev@users --filter '@emails'
+      nodi request user-service.dev@users -p user_summary --filter '@active'
+      nodi request user-service.dev@users --format table
+    """
     if not request_spec:
-        click.echo("Usage: nodi request <service.env@endpoint>")
-        click.echo("Example: nodi request user-service.dev@users")
+        click.echo("Usage: nodi request <service.env@endpoint> [OPTIONS]")
+        click.echo("\nExamples:")
+        click.echo("  nodi request user-service.dev@users")
+        click.echo("  nodi request user-service.dev@users --projection user_summary")
+        click.echo("  nodi request user-service.dev@users --filter '.[0]'")
+        click.echo("  nodi request user-service.dev@users --filter '@emails'")
+        click.echo("  nodi request user-service.dev@users -p user_summary --filter '@active'")
         sys.exit(1)
 
     config_path = ctx.obj.get("config_path")
@@ -129,6 +145,10 @@ def request(ctx, request_spec, method, data, header, format, filter, verbose):
             click.echo(f"Headers: {headers}")
             if certificates:
                 click.echo(f"Certificates configured: cert={certificates.cert}, key={certificates.key}, ca={certificates.ca}")
+            if projection:
+                click.echo(f"Projection: {projection}")
+            if filter:
+                click.echo(f"Filter: {filter}")
             click.echo()
 
         # Create and execute request
@@ -146,11 +166,42 @@ def request(ctx, request_spec, method, data, header, format, filter, verbose):
             elapsed_ms=response.elapsed_time or 0,
         )
 
-        # Apply filter if specified
+        # Apply projection and filter if specified
         output_data = response.data
+
+        # Apply projection first (if specified)
+        if projection and output_data:
+            projection_spec = config.get_projection(projection)
+            if projection_spec:
+                json_projection = JSONProjection()
+                output_data = json_projection.apply(output_data, projection_spec)
+            else:
+                click.echo(Color.error(f"Unknown projection: {projection}"))
+                click.echo("Available projections:")
+                for proj_name in config.projections.keys():
+                    click.echo(f"  - {proj_name}")
+                sys.exit(1)
+
+        # Apply filter (if specified)
         if filter and output_data:
+            # Resolve predefined filter aliases (@filter_name)
+            resolved_filter = filter
+            if filter.startswith("@"):
+                filter_name = filter[1:].strip()
+                predefined_filter = config.get_filter(filter_name)
+                if predefined_filter:
+                    resolved_filter = predefined_filter
+                    if verbose:
+                        click.echo(f"Resolved filter '@{filter_name}' to: {predefined_filter}")
+                else:
+                    click.echo(Color.error(f"Unknown filter: @{filter_name}"))
+                    click.echo("Available filters:")
+                    for fname in config.filters.keys():
+                        click.echo(f"  @{fname}")
+                    sys.exit(1)
+
             json_filter = JSONFilter()
-            output_data = json_filter.apply(output_data, filter)
+            output_data = json_filter.apply(output_data, resolved_filter)
 
         # Format output
         if format == "json":
