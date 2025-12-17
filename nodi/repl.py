@@ -144,27 +144,24 @@ class NodiREPL:
 
     def _process_command(self, command: str):
         """Process a REPL command."""
-        # Check for filter/projection first (preserve the full command with |)
-        filter_expr = None
-        projection_spec = None
+        # Check for filter/projection chain (split on ALL pipes, not just first one)
+        filter_chain = []
 
         if "|" in command:
-            # Split on first | to get command and filter/projection
-            cmd_part, filter_part = command.split("|", 1)
-            command = cmd_part.strip()
-            # Remove 'jq' keyword if present
-            filter_expr = filter_part.strip()
-            if filter_expr.startswith("jq "):
-                filter_expr = filter_expr[3:].strip()
+            # Split on ALL pipes to support chaining: users | @filter1 | @filter2 | %projection
+            pipe_parts = command.split("|")
+            command = pipe_parts[0].strip()
 
-            # Check if it's a projection (starts with %)
-            if filter_expr.startswith("%"):
-                projection_spec = filter_expr[1:].strip()
-                projection_spec = self._resolve_projection(projection_spec)
-                filter_expr = None  # Clear filter, we're using projection
-            else:
-                # Resolve predefined filter if it starts with @
-                filter_expr = self._resolve_filter(filter_expr)
+            # Process all filter/projection parts
+            for filter_part in pipe_parts[1:]:
+                filter_part = filter_part.strip()
+
+                # Remove 'jq' keyword if present
+                if filter_part.startswith("jq "):
+                    filter_part = filter_part[3:].strip()
+
+                if filter_part:
+                    filter_chain.append(filter_part)
 
         parts = command.split()
         if not parts:
@@ -241,11 +238,11 @@ class NodiREPL:
             self._handle_format(parts)
 
         elif cmd in ("get", "post", "put", "patch", "delete", "head", "options"):
-            self._handle_http_request(cmd.upper(), parts[1:], filter_expr, projection_spec)
+            self._handle_http_request(cmd.upper(), parts[1:], filter_chain)
 
         else:
             # Try as endpoint request (GET by default)
-            self._handle_http_request("GET", parts, filter_expr, projection_spec)
+            self._handle_http_request("GET", parts, filter_chain)
 
     def _show_help(self):
         """Show help message."""
@@ -300,6 +297,11 @@ Projections:
   projections           Show predefined projections
   users | %projection   Apply predefined projection (field selection)
   users | %user_summary Example: Show only id, name, email
+
+Chaining (NEW):
+  users | @active | %summary | .[0]     Chain filters and projections
+  users | .[] | .name | jq length       Multiple transformations in sequence
+  users | %basic | @verified            Projection then filter
 
 Scripts:
   scripts               List all .nodi script files
@@ -615,11 +617,14 @@ Other:
         else:
             print(Color.error(f"Invalid format: {fmt}"))
 
-    def _handle_http_request(self, method: str, args: list, filter_expr: Optional[str] = None, projection_spec: Optional[Any] = None):
-        """Handle HTTP request."""
+    def _handle_http_request(self, method: str, args: list, filter_chain: list = None):
+        """Handle HTTP request with support for chained filters and projections."""
         if not args:
             print(f"Usage: {method.lower()} <endpoint> [-H <header>] [params...]")
             return
+
+        if filter_chain is None:
+            filter_chain = []
 
         # Parse arguments
         endpoint_spec = args[0]
@@ -674,14 +679,14 @@ Other:
                 elapsed_ms=response.elapsed_time or 0,
             )
 
-            # Display response
-            self._display_response(response, filter_expr, projection_spec)
+            # Display response with filter chain
+            self._display_response(response, filter_chain)
 
         except Exception as e:
             print(Color.error(f"Request failed: {str(e)}"))
 
-    def _display_response(self, response, filter_expr: Optional[str] = None, projection_spec: Optional[Any] = None):
-        """Display response."""
+    def _display_response(self, response, filter_chain: list = None):
+        """Display response with support for chained filters and projections."""
         # Show status
         if response.is_success:
             status_color = Color.GREEN
@@ -697,22 +702,43 @@ Other:
             )
         )
 
-        # Apply filter or projection if specified
+        # Start with response data
         data = response.data
 
-        # Apply projection first (if specified)
-        if projection_spec and data:
-            try:
-                data = self.json_projection.apply(data, projection_spec)
-            except Exception as e:
-                print(Color.warning(f"Projection error: {str(e)}"))
+        # Apply all filters and projections in the chain sequentially
+        # This matches the behavior in engine.py (lines 154-180)
+        if filter_chain and data:
+            for filter_spec in filter_chain:
+                filter_spec = filter_spec.strip()
 
-        # Then apply filter (if specified and no projection)
-        elif filter_expr and data:
-            try:
-                data = self.json_filter.apply(data, filter_expr)
-            except Exception as e:
-                print(Color.warning(f"Filter error: {str(e)}"))
+                try:
+                    if filter_spec.startswith('%'):
+                        # Projection
+                        projection_name = filter_spec[1:].strip()
+                        projection_spec = self._resolve_projection(projection_name)
+                        if projection_spec:
+                            data = self.json_projection.apply(data, projection_spec)
+                        else:
+                            print(Color.warning(f"Unknown projection: %{projection_name}"))
+
+                    elif filter_spec.startswith('@'):
+                        # Predefined filter
+                        filter_name = filter_spec[1:].strip()
+                        filter_expr = self._resolve_filter(filter_spec)
+                        if filter_expr and filter_expr != filter_spec:
+                            # Filter was resolved, apply it
+                            data = self.json_filter.apply(data, filter_expr)
+                        else:
+                            # Filter not found, but try to apply it anyway
+                            data = self.json_filter.apply(data, filter_spec)
+
+                    else:
+                        # Direct filter expression
+                        data = self.json_filter.apply(data, filter_spec)
+
+                except Exception as e:
+                    print(Color.warning(f"Filter/Projection error on '{filter_spec}': {str(e)}"))
+                    # Continue with current data even if one filter fails
 
         # Format output
         if data is not None:
